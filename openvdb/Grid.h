@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 //
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
@@ -489,9 +489,7 @@ public:
     typedef typename _TreeType::Ptr                       TreePtrType;
     typedef typename _TreeType::ConstPtr                  ConstTreePtrType;
     typedef typename _TreeType::ValueType                 ValueType;
-
-    typedef typename tree::ValueAccessor<_TreeType>       Accessor;
-    typedef typename tree::ValueAccessor<const _TreeType> ConstAccessor;
+    typedef typename _TreeType::BuildType                 BuildType;
 
     typedef typename _TreeType::ValueOnIter               ValueOnIter;
     typedef typename _TreeType::ValueOnCIter              ValueOnCIter;
@@ -499,6 +497,11 @@ public:
     typedef typename _TreeType::ValueOffCIter             ValueOffCIter;
     typedef typename _TreeType::ValueAllIter              ValueAllIter;
     typedef typename _TreeType::ValueAllCIter             ValueAllCIter;
+
+    typedef typename tree::ValueAccessor<_TreeType, true>        Accessor;
+    typedef typename tree::ValueAccessor<const _TreeType, true>  ConstAccessor;
+    typedef typename tree::ValueAccessor<_TreeType, false>       UnsafeAccessor;
+    typedef typename tree::ValueAccessor<const _TreeType, false> ConstUnsafeAccessor;
 
     /// @brief ValueConverter<T>::Type is the type of a grid having the same
     /// hierarchy as this grid but a different value type, T.
@@ -544,7 +547,7 @@ public:
     Grid(const Grid&, ShallowCopy);
     /// @brief Deep copy another grid's metadata and transform, but construct a new tree
     /// with background value zero.
-    Grid(const GridBase&);
+    explicit Grid(const GridBase&);
 
     virtual ~Grid() {}
 
@@ -585,13 +588,33 @@ public:
     /// Empty this grid, so that all voxels become inactive background voxels.
     virtual void clear() { tree().clear(); }
 
-    /// Return an accessor that provides random read and write access to this grid's voxels.
+    /// @brief Return an accessor that provides random read and write access
+    /// to this grid's voxels. The accessor is safe in the sense that
+    /// it is registered by the tree of this grid.
     Accessor getAccessor() { return Accessor(tree()); }
+    /// @brief Return an accessor that provides random read and write access
+    /// to this grid's voxels. The accessor is unsafe in the sense that
+    /// it is not registered by the tree of this grid. In some rare
+    /// cases this can give a performance advantage over a registered
+    /// accessor but it is unsafe if the tree topology is modified.
+    ///
+    /// @warning Only use this method if you're an expert and know the
+    /// risks of using an unregistered accessor (see tree/ValueAccessor.h)
+    UnsafeAccessor getUnsafeAccessor() { return UnsafeAccessor(tree()); }
     //@{
     /// Return an accessor that provides random read-only access to this grid's voxels.
     ConstAccessor getAccessor() const { return ConstAccessor(tree()); }
     ConstAccessor getConstAccessor() const { return ConstAccessor(tree()); }
     //@}
+    /// @brief Return an accessor that provides random read-only access
+    /// to this grid's voxels. The accessor is unsafe in the sense that
+    /// it is not registered by the tree of this grid. In some rare
+    /// cases this can give a performance advantage over a registered
+    /// accessor but it is unsafe if the tree topology is modified.
+    ///
+    /// @warning Only use this method if you're an expert and know the
+    /// risks of using an unregistered accessor (see tree/ValueAccessor.h)
+    ConstUnsafeAccessor getConstUnsafeAccessor() const { return ConstUnsafeAccessor(tree()); }
 
     //@{
     /// Return an iterator over all of this grid's active values (tile and voxel).
@@ -615,6 +638,7 @@ public:
     /// Return the minimum and maximum active values in this grid.
     void evalMinMax(ValueType& minVal, ValueType& maxVal) const;
 
+    //@{
     /// @brief Set all voxels within a given axis-aligned box to a constant value.
     /// @param bbox    inclusive coordinates of opposite corners of an axis-aligned box
     /// @param value   the value to which to set voxels within the box
@@ -623,7 +647,23 @@ public:
     /// @note This operation generates a sparse, but not always optimally sparse,
     /// representation of the filled box.  Follow fill operations with a prune()
     /// operation for optimal sparseness.
-    void fill(const CoordBBox& bbox, const ValueType& value, bool active = true);
+    void sparseFill(const CoordBBox& bbox, const ValueType& value, bool active = true);
+    void fill(const CoordBBox& bbox, const ValueType& value, bool active = true)
+    {
+        this->sparseFill(bbox, value, active);
+    }
+    //@}
+    
+    /// @brief Set all voxels within a given axis-aligned box to a constant value.
+    /// @param bbox    inclusive coordinates of opposite corners of an axis-aligned box.
+    /// @param value   the value to which to set voxels within the box.
+    /// @param active  if true, mark voxels within the box as active,
+    ///                otherwise mark them as inactive.
+    ///
+    /// @note This operation generates a dense representation of the
+    ///       filled box. This implies that active tiles are voxelized, i.e. only active 
+    ///       voxels are generated from this fill operation.
+    void denseFill(const CoordBBox& bbox, const ValueType& value, bool active = true);
 
     /// Reduce the memory footprint of this grid by increasing its sparseness.
     virtual void pruneGrid(float tolerance = 0.0);
@@ -1155,9 +1195,16 @@ Grid<TreeT>::newTree()
 
 template<typename TreeT>
 inline void
-Grid<TreeT>::fill(const CoordBBox& bbox, const ValueType& value, bool active)
+Grid<TreeT>::sparseFill(const CoordBBox& bbox, const ValueType& value, bool active)
 {
-    tree().fill(bbox, value, active);
+    tree().sparseFill(bbox, value, active);
+}
+
+template<typename TreeT>
+inline void
+Grid<TreeT>::denseFill(const CoordBBox& bbox, const ValueType& value, bool active)
+{
+    tree().denseFill(bbox, value, active);
 }
 
 template<typename TreeT>
@@ -1374,6 +1421,6 @@ createLevelSet(Real voxelSize, Real halfWidth)
 
 #endif // OPENVDB_GRID_HAS_BEEN_INCLUDED
 
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

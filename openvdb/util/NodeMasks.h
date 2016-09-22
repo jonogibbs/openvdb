@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 //
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
@@ -365,31 +365,75 @@ public:
     //
     // Bitwise logical operations
     //
-    NodeMask operator!() const { NodeMask m(*this); m.toggle(); return m; }
+    
+    /// @brief Apply a functor to the words of the this and the other mask.
+    ///
+    /// @details An example that implements the "operator&=" method:
+    /// @code
+    /// struct Op { inline void operator()(W &w1, const W& w2) const { w1 &= w2; } };
+    /// @endcode
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other, const WordOp& op)
+    {
+        Word *w1 = mWords;
+        const Word *w2 = other.mWords;
+        for (Index32 n = WORD_COUNT; n--;  ++w1, ++w2) op( *w1, *w2);
+        return *this;
+    }
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other1, const NodeMask& other2, const WordOp& op)
+    {
+        Word *w1 = mWords;
+        const Word *w2 = other1.mWords, *w3 = other2.mWords;
+        for (Index32 n = WORD_COUNT; n--;  ++w1, ++w2, ++w3) op( *w1, *w2, *w3);
+        return *this;
+    }
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other1, const NodeMask& other2, const NodeMask& other3,
+                            const WordOp& op)
+    {
+        Word *w1 = mWords;
+        const Word *w2 = other1.mWords, *w3 = other2.mWords, *w4 = other3.mWords;
+        for (Index32 n = WORD_COUNT; n--;  ++w1, ++w2, ++w3, ++w4) op( *w1, *w2, *w3, *w4);
+        return *this;
+    }
+    /// @brief Bitwise intersection
     const NodeMask& operator&=(const NodeMask& other)
     {
-        Index32 n = WORD_COUNT;
-        const Word* w2 = other.mWords;
-        for ( Word* w1 = mWords; n--; ++w1, ++w2) *w1 &= *w2;
+        Word *w1 = mWords;
+        const Word *w2 = other.mWords;
+        for (Index32 n = WORD_COUNT; n--;  ++w1, ++w2) *w1 &= *w2;
         return *this;
     }
+    /// @brief Bitwise union 
     const NodeMask& operator|=(const NodeMask& other)
     {
-        Index32 n = WORD_COUNT;
-        const Word* w2 = other.mWords;
-        for ( Word* w1 = mWords; n--; ++w1, ++w2) *w1 |= *w2;
+        Word *w1 = mWords;
+        const Word *w2 = other.mWords;
+        for (Index32 n = WORD_COUNT; n--;  ++w1, ++w2) *w1 |= *w2;
         return *this;
     }
+    /// @brief Bitwise difference
+    const NodeMask& operator-=(const NodeMask& other)
+    {
+        Word *w1 = mWords;
+        const Word *w2 = other.mWords;
+        for (Index32 n = WORD_COUNT; n--;  ++w1, ++w2) *w1 &= ~*w2;
+        return *this;
+    }
+    /// @brief Bitwise XOR
     const NodeMask& operator^=(const NodeMask& other)
     {
-        Index32 n = WORD_COUNT;
-        const Word* w2 = other.mWords;
-        for ( Word* w1 = mWords; n--; ++w1, ++w2) *w1 ^= *w2;
+        Word *w1 = mWords;
+        const Word *w2 = other.mWords;
+        for (Index32 n = WORD_COUNT; n--;  ++w1, ++w2) *w1 ^= *w2;
         return *this;
     }
+    NodeMask operator!()                      const { NodeMask m(*this); m.toggle(); return m; }
     NodeMask operator&(const NodeMask& other) const { NodeMask m(*this); m &= other; return m; }
     NodeMask operator|(const NodeMask& other) const { NodeMask m(*this); m |= other; return m; }
     NodeMask operator^(const NodeMask& other) const { NodeMask m(*this); m ^= other; return m; }
+   
     /// Return the byte size of this NodeMask
     static Index32 memUsage() { return static_cast<Index32>(WORD_COUNT*sizeof(Word)); }
     /// Return the total number of on bits
@@ -472,6 +516,17 @@ public:
         int n = WORD_COUNT;
         for (const Word *w = mWords; n-- && *w++ == Word(0);) ;
         return n == -1;
+    }
+    /// Return @c true if bits are either all off OR all on.
+    /// @param isOn Takes on the values of all bits if the method
+    /// returns true - else it is undefined.
+    bool isConstant(bool &isOn) const
+    {
+        isOn = (mWords[0] == ~Word(0));//first word has all bits on
+        if ( !isOn && mWords[0] != Word(0)) return false;//early out
+        const Word *w = mWords + 1, *n = mWords + WORD_COUNT;
+        while( w<n && *w == mWords[0] ) ++w;
+        return w == n; 
     }
     Index32 findFirstOn() const
     {
@@ -607,22 +662,57 @@ public:
     //
     // Bitwise logical operations
     //
-    NodeMask operator!() const { NodeMask m(*this); m.toggle(); return m; }
+    
+    /// @brief Apply a functor to the words of the this and the other mask.
+    ///
+    /// @details An example that implements the "operator&=" method:
+    /// @code
+    /// struct Op { inline void operator()(Word &w1, const Word& w2) const { w1 &= w2; } };
+    /// @endcode
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other, const WordOp& op)
+    {
+        op(mByte, other.mByte);
+        return *this;
+    }
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other1, const NodeMask& other2, const WordOp& op)
+    {
+        op(mByte, other1.mByte, other2.mByte);
+        return *this;
+    }
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other1, const NodeMask& other2, const NodeMask& other3,
+                            const WordOp& op)
+    {
+        op(mByte, other1.mByte, other2.mByte, other3.mByte);
+        return *this;
+    }
+    /// @brief Bitwise intersection
     const NodeMask& operator&=(const NodeMask& other)
     {
         mByte &= other.mByte;
         return *this;
     }
+    /// @brief Bitwise union 
     const NodeMask& operator|=(const NodeMask& other)
     {
         mByte |= other.mByte;
         return *this;
     }
+    /// @brief Bitwise difference 
+    const NodeMask& operator-=(const NodeMask& other)
+    {
+        mByte &= static_cast<Byte>(~other.mByte);
+        return *this;
+    }
+    /// @brief Bitwise XOR
     const NodeMask& operator^=(const NodeMask& other)
     {
         mByte ^= other.mByte;
         return *this;
     }
+    NodeMask operator!()                      const { NodeMask m(*this); m.toggle(); return m; }
     NodeMask operator&(const NodeMask& other) const { NodeMask m(*this); m &= other; return m; }
     NodeMask operator|(const NodeMask& other) const { NodeMask m(*this); m |= other; return m; }
     NodeMask operator^(const NodeMask& other) const { NodeMask m(*this); m ^= other; return m; }
@@ -677,6 +767,14 @@ public:
     bool isOn() const { return mByte == 0xFFU; }
     /// Return true if all the bits are off
     bool isOff() const { return mByte == 0; }
+    /// Return @c true if bits are either all off OR all on.
+    /// @param isOn Takes on the values of all bits if the method
+    /// returns true - else it is undefined.
+    bool isConstant(bool &isOn) const
+    {
+        isOn = this->isOn();
+        return isOn || this->isOff();
+    }
     Index32 findFirstOn() const { return mByte ? FindLowestOn(mByte) : 8; }
     Index32 findFirstOff() const
     {
@@ -788,22 +886,57 @@ public:
     //
     // Bitwise logical operations
     //
-    NodeMask operator!() const { NodeMask m(*this); m.toggle(); return m; }
+
+    /// @brief Apply a functor to the words of the this and the other mask.
+    ///
+    /// @details An example that implements the "operator&=" method:
+    /// @code
+    /// struct Op { inline void operator()(Word &w1, const Word& w2) const { w1 &= w2; } };
+    /// @endcode
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other, const WordOp& op)
+    {
+        op(mWord, other.mWord);
+        return *this;
+    }
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other1, const NodeMask& other2, const WordOp& op)
+    {
+        op(mWord, other1.mWord, other2.mWord);
+        return *this;
+    }
+    template<typename WordOp>
+    const NodeMask& foreach(const NodeMask& other1, const NodeMask& other2, const NodeMask& other3,
+                            const WordOp& op)
+    {
+        op(mWord, other1.mWord, other2.mWord, other3.mWord);
+        return *this;
+    }
+    /// @brief Bitwise intersection
     const NodeMask& operator&=(const NodeMask& other)
     {
         mWord &= other.mWord;
         return *this;
     }
+    /// @brief Bitwise union
     const NodeMask& operator|=(const NodeMask& other)
     {
         mWord |= other.mWord;
         return *this;
     }
+    /// @brief Bitwise difference 
+    const NodeMask& operator-=(const NodeMask& other)
+    {
+        mWord &= ~other.mWord;
+        return *this;
+    }
+    /// @brief Bitwise XOR
     const NodeMask& operator^=(const NodeMask& other)
     {
         mWord ^= other.mWord;
         return *this;
     }
+    NodeMask operator!()                      const { NodeMask m(*this); m.toggle(); return m; }
     NodeMask operator&(const NodeMask& other) const { NodeMask m(*this); m &= other; return m; }
     NodeMask operator|(const NodeMask& other) const { NodeMask m(*this); m |= other; return m; }
     NodeMask operator^(const NodeMask& other) const { NodeMask m(*this); m ^= other; return m; }
@@ -853,11 +986,18 @@ public:
         return 0 != (mWord & (UINT64_C(0x01) << (n & 63)));
     }
     /// Return true if the <i>n</i>th bit is off
-    bool isOff(Index32 n) const {return !this->isOn(n); }
+    bool isOff(Index32 n) const {return !this->isOn(n); } 
     /// Return true if all the bits are on
     bool isOn() const { return mWord == UINT64_C(0xFFFFFFFFFFFFFFFF); }
     /// Return true if all the bits are off
     bool isOff() const { return mWord == 0; }
+    /// Return @c true if bits are either all off OR all on.
+    /// @param isOn Takes on the values of all bits if the method
+    /// returns true - else it is undefined.
+    bool isConstant(bool &isOn) const
+    {   isOn = this->isOn();
+        return isOn || this->isOff(); 
+    }
     Index32 findFirstOn() const { return mWord ? FindLowestOn(mWord) : 64; }
     Index32 findFirstOff() const
     {
@@ -1292,6 +1432,6 @@ public:
 
 #endif // OPENVDB_UTIL_NODEMASKS_HAS_BEEN_INCLUDED
 
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 //
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
@@ -42,6 +42,7 @@ class TestStats: public CppUnit::TestCase
 {
 public:
     CPPUNIT_TEST_SUITE(TestStats);
+    CPPUNIT_TEST(testMinMax);
     CPPUNIT_TEST(testExtrema);
     CPPUNIT_TEST(testStats);
     CPPUNIT_TEST(testHistogram);
@@ -51,6 +52,7 @@ public:
     CPPUNIT_TEST(testGridOperatorStats);
     CPPUNIT_TEST_SUITE_END();
 
+    void testMinMax();
     void testExtrema();
     void testStats();
     void testHistogram();
@@ -63,6 +65,25 @@ public:
 CPPUNIT_TEST_SUITE_REGISTRATION(TestStats);
 
 void
+TestStats::testMinMax()
+{
+    // test Coord which uses lexicographic less than
+    openvdb::math::MinMax<openvdb::Coord> s(openvdb::Coord::max(), openvdb::Coord::min());
+    CPPUNIT_ASSERT_EQUAL(openvdb::Coord::max(), s.min());
+    CPPUNIT_ASSERT_EQUAL(openvdb::Coord::min(), s.max());
+    s.add( openvdb::Coord(1,2,3) );
+    CPPUNIT_ASSERT_EQUAL(openvdb::Coord(1,2,3), s.min());
+    CPPUNIT_ASSERT_EQUAL(openvdb::Coord(1,2,3), s.max());
+    s.add( openvdb::Coord(0,2,3) );
+    CPPUNIT_ASSERT_EQUAL(openvdb::Coord(0,2,3), s.min());
+    CPPUNIT_ASSERT_EQUAL(openvdb::Coord(1,2,3), s.max());
+    s.add( openvdb::Coord(1,2,4) );
+    CPPUNIT_ASSERT_EQUAL(openvdb::Coord(0,2,3), s.min());
+    CPPUNIT_ASSERT_EQUAL(openvdb::Coord(1,2,4), s.max());
+}
+
+
+void
 TestStats::testExtrema()
 {
     {// trivial test
@@ -72,6 +93,7 @@ TestStats::testExtrema()
         CPPUNIT_ASSERT_EQUAL(2, int(s.size()));
         CPPUNIT_ASSERT_DOUBLES_EQUAL(0.0, s.min(), 0.000001);
         CPPUNIT_ASSERT_DOUBLES_EQUAL(1.0, s.max(), 0.000001);
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(1.0, s.range(), 0.000001);
         //s.print("test");
     }
     {// non-trivial test
@@ -81,6 +103,7 @@ TestStats::testExtrema()
         CPPUNIT_ASSERT_EQUAL(5, int(s.size()));
         CPPUNIT_ASSERT_DOUBLES_EQUAL(data[2], s.min(), 0.000001);
         CPPUNIT_ASSERT_DOUBLES_EQUAL(data[0], s.max(), 0.000001);
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(data[0]-data[2], s.range(), 0.000001);
         //s.print("test");
     }
     {// non-trivial test of Extrema::add(Extrema)
@@ -92,6 +115,7 @@ TestStats::testExtrema()
         CPPUNIT_ASSERT_EQUAL(5, int(s.size()));
         CPPUNIT_ASSERT_DOUBLES_EQUAL(data[2], s.min(), 0.000001);
         CPPUNIT_ASSERT_DOUBLES_EQUAL(data[0], s.max(), 0.000001);
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(data[0]-data[2], s.range(), 0.000001);
         //s.print("test");
     }
     {// Trivial test of Extrema::add(value, n)
@@ -102,6 +126,7 @@ TestStats::testExtrema()
         CPPUNIT_ASSERT_EQUAL(n, s.size());
         CPPUNIT_ASSERT_DOUBLES_EQUAL(val, s.min(), 0.000001);
         CPPUNIT_ASSERT_DOUBLES_EQUAL(val, s.max(), 0.000001);
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(0.0, s.range(), 0.000001);
     }
     {// Test 1 of Extrema::add(value), Extrema::add(value, n) and Extrema::add(Extrema)
         openvdb::math::Extrema s, t;
@@ -713,6 +738,6 @@ TestStats::testGridHistogram()
     }
 }
 
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

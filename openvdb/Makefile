@@ -1,4 +1,4 @@
-# Copyright (c) 2012-2014 DreamWorks Animation LLC
+# Copyright (c) 2012-2016 DreamWorks Animation LLC
 #
 # All rights reserved. This software is distributed under the
 # Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
@@ -166,7 +166,7 @@ BOOST_PYTHON_LIB := -lboost_python-gcc41-mt-python26-1_46_1
 NUMPY_INCL_DIR := /rel/map/generic-2013.22/include
 # The Epydoc executable
 # (leave blank if Epydoc is unavailable)
-EPYDOC := epydoc
+EPYDOC := /rel/map/generic_default-2014.24.237/bin/epydoc
 # Set PYTHON_WRAP_ALL_GRID_TYPES to "yes" to specify that the Python module
 # should expose (almost) all of the grid types defined in openvdb.h
 # Otherwise, only FloatGrid, BoolGrid and Vec3SGrid will be exposed
@@ -250,6 +250,8 @@ ifeq (yes,$(has_log4cplus))
     INCLDIRS += -isystem $(LOG4CPLUS_INCL_DIR)
 endif
 
+CXXFLAGS += -std=c++0x
+
 CXXFLAGS += -pthread $(OPTIMIZE) $(INCLDIRS)
 ifeq (yes,$(has_blosc))
     CXXFLAGS += -DOPENVDB_USE_BLOSC
@@ -310,7 +312,6 @@ INCLUDE_NAMES := \
     math/Coord.h \
     math/DDA.h \
     math/FiniteDifference.h \
-    math/Hermite.h \
     math/LegacyFrustum.h \
     math/Maps.h \
     math/Mat.h \
@@ -351,25 +352,32 @@ INCLUDE_NAMES := \
     tools/LevelSetFracture.h \
     tools/LevelSetMeasure.h \
     tools/LevelSetMorph.h \
+    tools/LevelSetPlatonic.h \
     tools/LevelSetRebuild.h \
     tools/LevelSetSphere.h \
     tools/LevelSetTracker.h \
     tools/LevelSetUtil.h \
     tools/MeshToVolume.h \
     tools/Morphology.h \
+    tools/MultiResGrid.h \
+    tools/ParticleAtlas.h \
     tools/ParticlesToLevelSet.h \
     tools/PointAdvect.h \
     tools/PointIndexGrid.h \
     tools/PointPartitioner.h \
     tools/PointScatter.h \
+    tools/PointsToMask.h \
     tools/PoissonSolver.h \
     tools/Prune.h \
     tools/RayIntersector.h \
     tools/RayTracer.h \
     tools/SignedFloodFill.h \
     tools/Statistics.h \
+    tools/TopologyToLevelSet.h \
     tools/ValueTransformer.h \
     tools/VectorTransformer.h \
+    tools/VelocityFields.h \
+    tools/VolumeAdvect.h \
     tools/VolumeToMesh.h \
     tools/VolumeToSpheres.h \
     tree/InternalNode.h \
@@ -377,6 +385,7 @@ INCLUDE_NAMES := \
     tree/LeafManager.h \
     tree/LeafNode.h \
     tree/LeafNodeBool.h \
+    tree/LeafNodeMask.h \
     tree/NodeManager.h \
     tree/NodeUnion.h \
     tree/RootNode.h \
@@ -391,6 +400,7 @@ INCLUDE_NAMES := \
     util/Name.h \
     util/NodeMasks.h \
     util/NullInterrupter.h \
+    util/PagedArray.h \
     util/Util.h \
     version.h \
 #
@@ -404,7 +414,6 @@ SRC_NAMES := \
     io/Queue.cc \
     io/Stream.cc \
     io/TempFile.cc \
-    math/Hermite.cc \
     math/Maps.cc \
     math/Proximity.cc \
     math/QuantizedUnitVec.cc \
@@ -442,7 +451,6 @@ UNITTEST_SRC_NAMES := \
     unittest/TestGridDescriptor.cc \
     unittest/TestGridIO.cc \
     unittest/TestGridTransformer.cc \
-    unittest/TestHermite.cc \
     unittest/TestInit.cc \
     unittest/TestInt32Metadata.cc \
     unittest/TestInt64Metadata.cc \
@@ -450,6 +458,8 @@ UNITTEST_SRC_NAMES := \
     unittest/TestLaplacian.cc \
     unittest/TestLeaf.cc \
     unittest/TestLeafBool.cc \
+    unittest/TestLeafManager.cc \
+    unittest/TestLeafMask.cc \
     unittest/TestLeafIO.cc \
     unittest/TestLeafOrigin.cc \
     unittest/TestLevelSetRayIntersector.cc \
@@ -463,12 +473,16 @@ UNITTEST_SRC_NAMES := \
     unittest/TestMetadata.cc \
     unittest/TestMetadataIO.cc \
     unittest/TestMetaMap.cc \
+    unittest/TestMultiResGrid.cc \
     unittest/TestName.cc \
     unittest/TestNodeIterator.cc \
+    unittest/TestNodeManager.cc \
     unittest/TestNodeMask.cc \
+    unittest/TestParticleAtlas.cc \
     unittest/TestParticlesToLevelSet.cc \
     unittest/TestPointIndexGrid.cc \
     unittest/TestPointPartitioner.cc \
+    unittest/TestPointsToMask.cc \
     unittest/TestPoissonSolver.cc \
     unittest/TestPrePostAPI.cc \
     unittest/TestQuadraticInterp.cc \
@@ -479,12 +493,14 @@ UNITTEST_SRC_NAMES := \
     unittest/TestStream.cc \
     unittest/TestStringMetadata.cc \
     unittest/TestTools.cc \
+    unittest/TestTopologyToLevelSet.cc \
     unittest/TestTransform.cc \
     unittest/TestTree.cc \
     unittest/TestTreeCombine.cc \
     unittest/TestTreeGetSetValues.cc \
     unittest/TestTreeIterators.cc \
     unittest/TestTreeVisitor.cc \
+    unittest/TestUtil.cc \
     unittest/TestValueAccessor.cc \
     unittest/TestVec2Metadata.cc \
     unittest/TestVec3Metadata.cc \
@@ -927,6 +943,6 @@ ifneq (,$(strip $(wildcard $(DEPEND))))
     include $(DEPEND)
 endif
 
-# Copyright (c) 2012-2014 DreamWorks Animation LLC
+# Copyright (c) 2012-2016 DreamWorks Animation LLC
 # All rights reserved. This software is distributed under the
 # Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

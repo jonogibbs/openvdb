@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 //
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
@@ -40,6 +40,7 @@
 
 #include <openvdb/tools/LevelSetUtil.h>
 #include <openvdb/tools/MeshToVolume.h>
+#include <openvdb/tools/Morphology.h>
 #include <openvdb/tools/VolumeToMesh.h>
 #include <openvdb/tools/Prune.h>
 #include <openvdb/tree/ValueAccessor.h>
@@ -69,6 +70,12 @@
 #define HAVE_SPLITTING 1
 #else
 #define HAVE_SPLITTING 0
+#endif
+
+#if (UT_VERSION_INT >= 0x0e05005b) // 14.5.91 or later
+#define HAVE_ACTIVATEINSIDE 1
+#else
+#define HAVE_ACTIVATEINSIDE 0
 #endif
 
 #if defined(__GNUC__) && !defined(__INTEL_COMPILER)
@@ -102,8 +109,6 @@ public:
     // should be drawn dashed rather than solid.
     virtual int isRefInput(unsigned idx) const { return (idx == 1); }
 
-    void checkActivePart(float time);
-
 protected:
     virtual OP_ERROR cookMySop(OP_Context&);
     virtual bool updateParmsFlags();
@@ -126,39 +131,6 @@ private:
         hvdb::Interrupter& boss,
         const fpreal time);
 };
-
-
-////////////////////////////////////////
-
-
-namespace {
-
-// Callback to check partition limit
-int
-checkActivePartCB(void* data, int /*idx*/, float time, const PRM_Template*)
-{
-    SOP_OpenVDB_Convert* sop = static_cast<SOP_OpenVDB_Convert*>(data);
-    if (sop == NULL) return 0;
-    sop->checkActivePart(time);
-    return 1;
-}
-
-} // namespace
-
-
-void
-SOP_OpenVDB_Convert::checkActivePart(float time)
-{
-    const int partitions = evalInt("automaticpartitions", 0, time);
-    const int activepart = evalInt("activepart", 0, time);
-
-    if (activepart > partitions) {
-        setInt("activepart", 0, time, partitions);
-    }
-}
-
-
-////////////////////////////////////////
 
 
 // Build UI and register this operator.
@@ -239,18 +211,6 @@ newSopOperator(OP_OperatorTable* table)
 
     parms.add(hutil::ParmFactory(PRM_TOGGLE, "computenormals", "Compute Vertex Normals")
         .setHelpText("Compute edge-preserving vertex normals"));
-
-    parms.add(hutil::ParmFactory(PRM_INT_J, "automaticpartitions", "Automatic Partitions")
-        .setRange(PRM_RANGE_RESTRICTED, 1, PRM_RANGE_UI, 20)
-        .setHelpText("Subdivide volume and mesh into disjoint parts")
-        .setDefault(PRMoneDefaults)
-        .setCallbackFunc(&checkActivePartCB));
-
-    parms.add(hutil::ParmFactory(PRM_INT_J, "activepart", "Active Partition")
-        .setRange(PRM_RANGE_RESTRICTED, 1, PRM_RANGE_UI, 20)
-        .setHelpText("Specific partition to mesh")
-        .setDefault(PRMzeroDefaults)
-        .setCallbackFunc(&checkActivePartCB));
 
 
     //////////
@@ -355,12 +315,20 @@ newSopOperator(OP_OperatorTable* table)
         .setDefault(PRMoneDefaults)
         .setHelpText("Reclassify inactive output voxels as either inside or outside."));
 
+#if HAVE_ACTIVATEINSIDE
+    parms.add(hutil::ParmFactory(PRM_TOGGLE, "activateinsidesdf", "Activate Inside Voxels")
+        .setDefault(PRMoneDefaults)
+        .setHelpText("Activate all voxels inside a converted level set."));
+#endif
+
     //////////
 
     // Obsolete parameters
     hutil::ParmList obsoleteParms;
     obsoleteParms.add(hutil::ParmFactory(PRM_SEPARATOR,"sep1", ""));
     obsoleteParms.add(hutil::ParmFactory(PRM_TOGGLE, "smoothseams", "Smooth Seams"));
+    obsoleteParms.add(hutil::ParmFactory(PRM_INT_J, "automaticpartitions", ""));
+    obsoleteParms.add(hutil::ParmFactory(PRM_INT_J, "activepart", ""));
 
     // Register this operator.
     hvdb::OpenVDBOpFactory("OpenVDB Convert",
@@ -438,13 +406,18 @@ convertToOpenVDB(
     GA_PrimitiveGroup* group,
     bool flood,
     bool prune,
-    fpreal tolerance)
+    fpreal tolerance,
+    bool activateinsidesdf)
 {
     GU_ConvertParms parms;
     parms.primGroup = group;
     parms.preserveGroups = true;
     GU_PrimVDB::convertVolumesToVDBs(
-        dst, dst, parms, flood, prune, tolerance, /*keep_original*/false);
+        dst, dst, parms, flood, prune, tolerance, /*keep_original*/false
+#if HAVE_ACTIVATEINSIDE
+	, activateinsidesdf
+#endif
+	);
 }
 
 
@@ -519,12 +492,12 @@ convertVDBClass(
                     }
                 }
 
-                tools::MeshToVolume<FloatGrid> vol(transform);
-                vol.convertToLevelSet(points, primitives,
-                    LEVEL_SET_HALF_WIDTH, LEVEL_SET_HALF_WIDTH);
+                openvdb::tools::QuadAndTriangleDataAdapter<openvdb::Vec3s, openvdb::Vec4I> mesh(points, primitives);
+
+                openvdb::FloatGrid::Ptr sdfGrid = openvdb::tools::meshToVolume<openvdb::FloatGrid>(mesh, *transform);
 
                 // Set grid and visualization
-                it->setGrid(*vol.distGridPtr());
+                it->setGrid(*sdfGrid);
                 it->setVisualization(
                     GEO_VOLUMEVIS_ISO, it->getVisIso(), it->getVisDensity());
                 break;
@@ -847,9 +820,6 @@ SOP_OpenVDB_Convert::updateParmsFlags()
     const bool adaptivityfield = bool(evalInt("adaptivityfield", 0, 0));
     changed |= enableParm("adaptivityfieldname", toPoly && maskexists && adaptivityfield);
 
-    const bool partition = evalInt("automaticpartitions", 0, 0) > 1;
-    changed |= enableParm("activepart", partition);
-
 #if HAVE_SPLITTING
     changed |= setVisibleState("splitdisjointvolumes", toVolume);
 #endif
@@ -858,8 +828,6 @@ SOP_OpenVDB_Convert::updateParmsFlags()
     changed |= setVisibleState("isoValue", toPoly);
     changed |= setVisibleState("fogisovalue", toOpenVDB);
     changed |= setVisibleState("computenormals", toPoly);
-    changed |= setVisibleState("automaticpartitions", toPoly);
-    changed |= setVisibleState("activepart", toPoly);
 
     changed |= setVisibleState("internaladaptivity", toPoly);
     changed |= setVisibleState("transferattributes", toPoly);
@@ -881,6 +849,12 @@ SOP_OpenVDB_Convert::updateParmsFlags()
     changed |= setVisibleState("prune", toOpenVDB);
     changed |= setVisibleState("tolerance", toOpenVDB);
     changed |= setVisibleState("vdbclass", toOpenVDB);
+
+#if HAVE_ACTIVATEINSIDE
+    changed |= setVisibleState("activateinsidesdf", toOpenVDB);
+    if (toOpenVDB)
+	changed |= enableParm("activateinsidesdf", evalInt("flood",  0, time));
+#endif
 
     return changed;
 }
@@ -923,8 +897,10 @@ SOP_OpenVDB_Convert::referenceMeshing(
     const openvdb::GridClass gridClass = firstGrid->getGridClass();
 
     typename GridType::ConstPtr refGrid;
-    typedef typename openvdb::tools::MeshToVolume<GridType>::IntGridT IntGridT;
+
+    typedef typename GridType::template ValueConverter<openvdb::Int32>::Type IntGridT;
     typename IntGridT::Ptr indexGrid;
+
     openvdb::tools::MeshToVoxelEdgeData edgeData;
 
     boost::shared_ptr<GU_Detail> geoPtr;
@@ -951,19 +927,19 @@ SOP_OpenVDB_Convert::referenceMeshing(
 
         if (boss.wasInterrupted()) return;
 
-        openvdb::tools::MeshToVolume<GridType, hvdb::Interrupter>
-            converter(transform, openvdb::tools::GENERATE_PRIM_INDEX_GRID, &boss);
+        openvdb::tools::QuadAndTriangleDataAdapter<openvdb::Vec3s, openvdb::Vec4I> mesh(pointList, primList);
 
-        if (gridClass == openvdb::GRID_LEVEL_SET) {
-            converter.convertToLevelSet(pointList, primList);
-        } else {
-            const ValueType bandWidth = static_cast<ValueType>(
-                backgroundValue / transform->voxelSize()[0]);
-            converter.convertToLevelSet(pointList, primList, bandWidth, bandWidth);
+        float bandWidth = 3.0;
+
+        if (gridClass != openvdb::GRID_LEVEL_SET) {
+            bandWidth = float(backgroundValue) / float(transform->voxelSize()[0]);
         }
 
-        refGrid = converter.distGridPtr();
-        indexGrid = converter.indexGridPtr();
+        indexGrid.reset(new IntGridT(0));
+
+        refGrid = openvdb::tools::meshToVolume<GridType>(boss,
+            mesh, *transform, bandWidth, bandWidth, 0, indexGrid.get());
+
         if (sharpenFeatures) edgeData.convert(pointList, primList);
     }
 
@@ -1145,9 +1121,6 @@ SOP_OpenVDB_Convert::convertToPoly(
 
     openvdb::tools::VolumeToMesh mesher(iso, adaptivity);
 
-    // Slicing options
-    mesher.partition(evalInt("automaticpartitions", 0, time), evalInt("activepart", 0, time) - 1);
-
     // Check mask input
     const GU_Detail* maskGeo = inputGeo(2);
     if (maskGeo) {
@@ -1155,9 +1128,13 @@ SOP_OpenVDB_Convert::convertToPoly(
         if (evalInt("surfacemask", 0, time)) {
             UT_String maskStr;
             evalString(maskStr, "surfacemaskname", 0, time);
-
+#if (UT_MAJOR_VERSION_INT >= 15)
+            const GA_PrimitiveGroup * maskGroup =
+                parsePrimitiveGroups(maskStr.buffer(), GroupCreator(maskGeo));
+#else
             const GA_PrimitiveGroup * maskGroup =
                 parsePrimitiveGroups(maskStr.buffer(), const_cast<GU_Detail*>(maskGeo));
+#endif
 
             if (!maskGroup && maskStr.length() > 0) {
                 addWarning(SOP_MESSAGE, "Surface mask not found.");
@@ -1310,13 +1287,21 @@ SOP_OpenVDB_Convert::cookMySop(OP_Context& context)
     try {
         hutil::ScopedInputLock lock(*this, context);
 
+        // We are intentionally not performing a duplicateSourceStealable() here due to
+        // specific implementation in this SOP which causes undesirable behavior when
+        // attempting to "steal" the geometry
         duplicateSource(0, context);
 
         const fpreal t = context.getTime();
 
         UT_String group_str;
         evalString(group_str, "group", 0, t);
+
+#if (UT_MAJOR_VERSION_INT >= 15)
+        GA_PrimitiveGroup* group = parsePrimitiveGroupsCopy(group_str, GroupCreator(gdp));
+#else
         GA_PrimitiveGroup* group = parsePrimitiveGroupsCopy(group_str, gdp);
+#endif
 
         hvdb::Interrupter interrupter("Convert");
 
@@ -1332,10 +1317,16 @@ SOP_OpenVDB_Convert::cookMySop(OP_Context& context)
                 break;
             }
             case OPENVDB: {
+#if HAVE_ACTIVATEINSIDE
+		const bool activateinside = (evalInt("activateinsidesdf", 0, t) != 0);
+#else
+		const bool activateinside = true;
+#endif
                 convertToOpenVDB(*gdp, group,
                     (evalInt("flood", 0, t) != 0),
                     (evalInt("prune", 0, t) != 0),
-                    evalFloat("tolerance", 0, t));
+                    evalFloat("tolerance", 0, t),
+		    activateinside);
 
                 switch (evalInt("vdbclass", 0, t)) {
                     case CLASS_SDF:
@@ -1381,6 +1372,6 @@ SOP_OpenVDB_Convert::cookMySop(OP_Context& context)
     return error();
 }
 
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 //
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
@@ -29,6 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////
 //
 /// @file tree/Tree.h
+///
+/// @todo Optimize Tree::evalMinMax
 
 #ifndef OPENVDB_TREE_TREE_HAS_BEEN_INCLUDED
 #define OPENVDB_TREE_TREE_HAS_BEEN_INCLUDED
@@ -87,7 +89,7 @@ public:
 
     /// @brief Return in @a bbox the axis-aligned bounding box of all
     /// leaf nodes and active tiles.
-    /// @details This is faster then calling evalActiveVoxelBoundingBox,
+    /// @details This is faster than calling evalActiveVoxelBoundingBox,
     /// which visits the individual active voxels, and hence
     /// evalLeafBoundingBox produces a less tight, i.e. approximate, bbox.
     /// @return @c false if the bounding box is empty (in which case
@@ -208,6 +210,7 @@ public:
 
     typedef _RootNodeType                        RootNodeType;
     typedef typename RootNodeType::ValueType     ValueType;
+    typedef typename RootNodeType::BuildType     BuildType;
     typedef typename RootNodeType::LeafNodeType  LeafNodeType;
 
     static const Index DEPTH = RootNodeType::LEVEL + 1;
@@ -283,7 +286,7 @@ public:
     /// Empty tree constructor
     Tree(const ValueType& background): mRoot(background) {}
 
-    virtual ~Tree() { releaseAllAccessors(); }
+    virtual ~Tree() { this->clear(); releaseAllAccessors(); }
 
     /// Return a pointer to a deep copy of this tree
     virtual TreeBase::Ptr copy() const { return TreeBase::Ptr(new Tree(*this)); }
@@ -480,16 +483,32 @@ public:
     virtual void clipUnallocatedNodes();
 #endif
 
+    //@{
     /// @brief Set all voxels within a given axis-aligned box to a constant value.
-    /// If necessary, subdivide tiles that intersect the box.
-    /// @param bbox           inclusive coordinates of opposite corners of an axis-aligned box
-    /// @param value          the value to which to set voxels within the box
-    /// @param active         if true, mark voxels within the box as active,
-    ///                       otherwise mark them as inactive
+    /// @param bbox    inclusive coordinates of opposite corners of an axis-aligned box
+    /// @param value   the value to which to set voxels within the box
+    /// @param active  if true, mark voxels within the box as active,
+    ///                otherwise mark them as inactive
     /// @note This operation generates a sparse, but not always optimally sparse,
-    /// representation of the filled box.  Follow fill operations with a prune()
+    /// representation of the filled box. Follow fill operations with a prune()
     /// operation for optimal sparseness.
-    void fill(const CoordBBox& bbox, const ValueType& value, bool active = true);
+    void sparseFill(const CoordBBox& bbox, const ValueType& value, bool active = true);
+    void fill(const CoordBBox& bbox, const ValueType& value, bool active = true)
+    {
+        this->sparseFill(bbox, value, active);
+    }
+    //@}
+
+    /// @brief Set all voxels within a given axis-aligned box to a constant value.
+    /// @param bbox    inclusive coordinates of opposite corners of an axis-aligned box.
+    /// @param value   the value to which to set voxels within the box.
+    /// @param active  if true, mark voxels within the box as active,
+    ///                otherwise mark them as inactive.
+    ///
+    /// @note This operation generates a dense representation of the
+    ///       filled box. This implies that active tiles are voxelized, i.e. only active
+    ///       voxels are generated from this fill operation.
+    void denseFill(const CoordBBox& bbox, const ValueType& value, bool active = true);
 
     /// @brief Reduce the memory footprint of this tree by replacing with tiles
     /// any nodes whose values are all the same (optionally to within a tolerance)
@@ -501,9 +520,15 @@ public:
         mRoot.prune(tolerance);
     }
 
+    //@{
     /// @brief Add the given leaf node to this tree, creating a new branch if necessary.
     /// If a leaf node with the same origin already exists, replace it.
-    void addLeaf(LeafNodeType& leaf) { mRoot.addLeaf(&leaf); }
+    ///
+    /// @warning Ownership of the leaf is transferred to the tree so
+    /// the client code should not attempt to delete the leaf pointer!
+    void addLeaf(LeafNodeType* leaf) { assert(leaf); mRoot.addLeaf(leaf); }
+    OPENVDB_DEPRECATED void addLeaf(LeafNodeType& leaf) { mRoot.addLeaf(&leaf); }
+    //@}
 
     /// @brief Add a tile containing voxel (x, y, z) at the specified tree level,
     /// creating a new branch if necessary.  Delete any existing lower-level nodes
@@ -541,7 +566,6 @@ public:
     const LeafNodeType* probeLeaf(const Coord& xyz) const { return this->probeConstLeaf(xyz); }
     //@}
 
-
     //@{
     /// @brief Adds all nodes of a certain type to a container with the following API:
     /// @code
@@ -569,6 +593,38 @@ public:
     template<typename ArrayT> void getNodes(ArrayT& array) const { mRoot.getNodes(array); }
     //@}
 
+    /// @brief Steals all nodes of a certain type from the tree and
+    /// adds them to a container with the following API:
+    /// @code
+    /// struct ArrayT {
+    ///    typedef value_type;// defines the type of nodes to be added to the array
+    ///    void push_back(value_type nodePtr);// method that add nodes to the array
+    /// };
+    /// @endcode
+    /// @details An example of a wrapper around a c-style array is:
+    /// @code
+    /// struct MyArray {
+    ///    typedef LeafType* value_type;
+    ///    value_type* ptr;
+    ///    MyArray(value_type* array) : ptr(array) {}
+    ///    void push_back(value_type leaf) { *ptr++ = leaf; }
+    ///};
+    /// @endcode
+    /// @details An example that constructs a list of pointer to all leaf nodes is:
+    /// @code
+    /// std::vector<const LeafNodeType*> array;//most std contains have the required API
+    /// array.reserve(tree.leafCount());//this is a fast preallocation.
+    /// tree.stealNodes(array);
+    /// @endcode
+    template<typename ArrayT>
+    void stealNodes(ArrayT& array) { this->clearAllAccessors(); mRoot.stealNodes(array); }
+    template<typename ArrayT>
+    void stealNodes(ArrayT& array, const ValueType& value, bool state)
+    {
+        this->clearAllAccessors();
+        mRoot.stealNodes(array, value, state);
+    }
+
     //
     // Aux methods
     //
@@ -577,7 +633,7 @@ public:
     bool empty() const { return mRoot.empty(); }
 
     /// Remove all tiles from this tree and all nodes other than the root node.
-    void clear() { this->clearAllAccessors(); mRoot.clear(); }
+    void clear();
 
     /// Clear all registered accessors.
     void clearAllAccessors();
@@ -585,19 +641,32 @@ public:
     //@{
     /// @brief Register an accessor for this tree.  Registered accessors are
     /// automatically cleared whenever one of this tree's nodes is deleted.
-    void attachAccessor(ValueAccessorBase<Tree>&) const;
-    void attachAccessor(ValueAccessorBase<const Tree>&) const;
+    void attachAccessor(ValueAccessorBase<Tree, true>&) const;
+    void attachAccessor(ValueAccessorBase<const Tree, true>&) const;
     //@}
+
+    //@{
+    /// Dummy implementations
+    void attachAccessor(ValueAccessorBase<Tree, false>&) const {}
+    void attachAccessor(ValueAccessorBase<const Tree, false>&) const {}
+    //@}
+
     //@{
     /// Deregister an accessor so that it is no longer automatically cleared.
-    void releaseAccessor(ValueAccessorBase<Tree>&) const;
-    void releaseAccessor(ValueAccessorBase<const Tree>&) const;
+    void releaseAccessor(ValueAccessorBase<Tree, true>&) const;
+    void releaseAccessor(ValueAccessorBase<const Tree, true>&) const;
+    //@}
+
+    //@{
+    /// Dummy implementations
+    void releaseAccessor(ValueAccessorBase<Tree, false>&) const {}
+    void releaseAccessor(ValueAccessorBase<const Tree, false>&) const {}
     //@}
 
     /// @brief Return this tree's background value wrapped as metadata.
     /// @note Query the metadata object for the value's type.
     virtual Metadata::Ptr getBackgroundValue() const;
-    
+
     /// @brief Return this tree's background value.
     ///
     /// @note Use tools::changeBackground to efficiently modify the
@@ -608,8 +677,13 @@ public:
     /// Min and max are both inclusive.
     virtual void getIndexRange(CoordBBox& bbox) const { mRoot.getIndexRange(bbox); }
 
-    /// Densify active tiles, i.e., replace them with leaf-level active voxels.
-    void voxelizeActiveTiles();
+    /// @brief Densify active tiles, i.e., replace them with leaf-level active voxels.
+    ///
+    /// @param threaded if true, this operation is multi-threaded (over the internal nodes).
+    ///
+    /// @warning This method can explode the tree's memory footprint, especially if it
+    /// contains active tiles at the upper levels, e.g. root level!
+    void voxelizeActiveTiles(bool threaded = true);
 
     /// @brief Efficiently merge another tree into this tree using one of several schemes.
     /// @details This operation is primarily intended to combine trees that are mostly
@@ -1137,8 +1211,8 @@ public:
 
 
 protected:
-    typedef tbb::concurrent_hash_map<ValueAccessorBase<Tree>*, bool> AccessorRegistry;
-    typedef tbb::concurrent_hash_map<ValueAccessorBase<const Tree>*, bool> ConstAccessorRegistry;
+    typedef tbb::concurrent_hash_map<ValueAccessorBase<Tree, true>*, bool> AccessorRegistry;
+    typedef tbb::concurrent_hash_map<ValueAccessorBase<const Tree, true>*, bool> ConstAccessorRegistry;
 
     // Disallow assignment of instances of this class.
     Tree& operator=(const Tree&);
@@ -1147,6 +1221,18 @@ protected:
     /// that this tree is about to be deleted.
     void releaseAllAccessors();
 
+    // TBB body object used to deallocates nodes in parallel.
+    template<typename NodeType>
+    struct DeallocateNodes {
+        DeallocateNodes(std::vector<NodeType*>& nodes)
+            : mNodes(nodes.empty() ? NULL : &nodes.front()) { }
+        void operator()(const tbb::blocked_range<size_t>& range) const {
+            for (size_t n = range.begin(), N = range.end(); n < N; ++n) {
+                delete mNodes[n]; mNodes[n] = NULL;
+            }
+        }
+        NodeType ** const mNodes;
+    };
 
     //
     // Data members
@@ -1166,7 +1252,7 @@ tbb::atomic<const Name*> Tree<_RootNodeType>::sTreeTypeName;
 /// (Root, Internal, Leaf) with value type T and
 /// internal and leaf node log dimensions N1 and N2, respectively.
 /// @note This is NOT the standard tree configuration (Tree4 is).
-template<typename T, Index N1, Index N2>
+template<typename T, Index N1=4, Index N2=3>
 struct Tree3 {
     typedef Tree<RootNode<InternalNode<LeafNode<T, N2>, N1> > > Type;
 };
@@ -1176,17 +1262,16 @@ struct Tree3 {
 /// (Root, Internal, Internal, Leaf) with value type T and
 /// internal and leaf node log dimensions N1, N2 and N3, respectively.
 /// @note This is the standard tree configuration.
-template<typename T, Index N1, Index N2, Index N3>
+template<typename T, Index N1=5, Index N2=4, Index N3=3>
 struct Tree4 {
     typedef Tree<RootNode<InternalNode<InternalNode<LeafNode<T, N3>, N2>, N1> > > Type;
 };
-
 
 /// @brief Tree5<T, N1, N2, N3, N4>::Type is the type of a five-level tree
 /// (Root, Internal, Internal, Internal, Leaf) with value type T and
 /// internal and leaf node log dimensions N1, N2, N3 and N4, respectively.
 /// @note This is NOT the standard tree configuration (Tree4 is).
-template<typename T, Index N1, Index N2, Index N3, Index N4>
+template<typename T, Index N1=6, Index N2=5, Index N3=4, Index N4=3>
 struct Tree5 {
     typedef Tree<RootNode<InternalNode<InternalNode<InternalNode<LeafNode<T, N4>, N3>, N2>, N1> > >
         Type;
@@ -1218,6 +1303,9 @@ TreeBase::print(std::ostream& os, int /*verboseLevel*/) const
 {
     os << "    Tree Type: " << type()
        << "    Active Voxel Count: " << activeVoxelCount() << std::endl
+#ifndef OPENVDB_2_ABI_COMPATIBLE
+       << "    Active tile Count: " << activeTileCount() << std::endl
+#endif
        << "    Inactive Voxel Count: " << inactiveVoxelCount() << std::endl
        << "    Leaf Node Count: " << leafCount() << std::endl
        << "    Non-leaf Node Count: " << nonLeafCount() << std::endl;
@@ -1393,12 +1481,34 @@ Tree<RootNodeType>::writeBuffers(std::ostream &os, bool saveFloatAsHalf) const
 }
 
 
+template<typename RootNodeType>
+inline void
+Tree<RootNodeType>::clear()
+{
+    std::vector<LeafNodeType*> leafnodes;
+    this->stealNodes(leafnodes);
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, leafnodes.size()),
+        DeallocateNodes<LeafNodeType>(leafnodes));
+
+    std::vector<typename RootNodeType::ChildNodeType*> internalNodes;
+    this->stealNodes(internalNodes);
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, internalNodes.size()),
+        DeallocateNodes<typename RootNodeType::ChildNodeType>(internalNodes));
+
+    mRoot.clear();
+
+    this->clearAllAccessors();
+}
+
+
 ////////////////////////////////////////
 
 
 template<typename RootNodeType>
 inline void
-Tree<RootNodeType>::attachAccessor(ValueAccessorBase<Tree>& accessor) const
+Tree<RootNodeType>::attachAccessor(ValueAccessorBase<Tree, true>& accessor) const
 {
     typename AccessorRegistry::accessor a;
     mAccessorRegistry.insert(a, &accessor);
@@ -1407,7 +1517,7 @@ Tree<RootNodeType>::attachAccessor(ValueAccessorBase<Tree>& accessor) const
 
 template<typename RootNodeType>
 inline void
-Tree<RootNodeType>::attachAccessor(ValueAccessorBase<const Tree>& accessor) const
+Tree<RootNodeType>::attachAccessor(ValueAccessorBase<const Tree, true>& accessor) const
 {
     typename ConstAccessorRegistry::accessor a;
     mConstAccessorRegistry.insert(a, &accessor);
@@ -1416,7 +1526,7 @@ Tree<RootNodeType>::attachAccessor(ValueAccessorBase<const Tree>& accessor) cons
 
 template<typename RootNodeType>
 inline void
-Tree<RootNodeType>::releaseAccessor(ValueAccessorBase<Tree>& accessor) const
+Tree<RootNodeType>::releaseAccessor(ValueAccessorBase<Tree, true>& accessor) const
 {
     mAccessorRegistry.erase(&accessor);
 }
@@ -1424,7 +1534,7 @@ Tree<RootNodeType>::releaseAccessor(ValueAccessorBase<Tree>& accessor) const
 
 template<typename RootNodeType>
 inline void
-Tree<RootNodeType>::releaseAccessor(ValueAccessorBase<const Tree>& accessor) const
+Tree<RootNodeType>::releaseAccessor(ValueAccessorBase<const Tree, true>& accessor) const
 {
     mConstAccessorRegistry.erase(&accessor);
 }
@@ -1691,10 +1801,18 @@ Tree<RootNodeType>::clipUnallocatedNodes()
 
 template<typename RootNodeType>
 inline void
-Tree<RootNodeType>::fill(const CoordBBox& bbox, const ValueType& value, bool active)
+Tree<RootNodeType>::denseFill(const CoordBBox& bbox, const ValueType& value, bool active)
 {
     this->clearAllAccessors();
-    return mRoot.fill(bbox, value, active);
+    return mRoot.denseFill(bbox, value, active);
+}
+
+template<typename RootNodeType>
+inline void
+Tree<RootNodeType>::sparseFill(const CoordBBox& bbox, const ValueType& value, bool active)
+{
+    this->clearAllAccessors();
+    return mRoot.sparseFill(bbox, value, active);
 }
 
 
@@ -1706,7 +1824,8 @@ Tree<RootNodeType>::getBackgroundValue() const
     if (Metadata::isRegisteredType(valueType())) {
         typedef TypedMetadata<ValueType> MetadataT;
         result = Metadata::createMetadata(valueType());
-        if (MetadataT* m = dynamic_cast<MetadataT*>(result.get())) {
+        if (result->typeName() == MetadataT::staticTypeName()) {
+            MetadataT* m = static_cast<MetadataT*>(result.get());
             m->value() = mRoot.background();
         }
     }
@@ -1719,10 +1838,10 @@ Tree<RootNodeType>::getBackgroundValue() const
 
 template<typename RootNodeType>
 inline void
-Tree<RootNodeType>::voxelizeActiveTiles()
+Tree<RootNodeType>::voxelizeActiveTiles(bool threaded)
 {
     this->clearAllAccessors();
-    mRoot.voxelizeActiveTiles();
+    mRoot.voxelizeActiveTiles(threaded);
 }
 
 
@@ -1992,7 +2111,7 @@ Tree<RootNodeType>::treeType()
         std::vector<Index> dims;
         Tree::getNodeLog2Dims(dims);
         std::ostringstream ostr;
-        ostr << "Tree_" << typeNameAsString<ValueType>();
+        ostr << "Tree_" << typeNameAsString<BuildType>();
         for (size_t i = 1, N = dims.size(); i < N; ++i) { // start from 1 to skip the RootNode
             ostr << "_" << dims[i];
         }
@@ -2184,9 +2303,11 @@ Tree<RootNodeType>::print(std::ostream& os, int verboseLevel) const
     const uint64_t
         leafCount = *nodeCount.rbegin(),
         numActiveVoxels = this->activeVoxelCount(),
-        numActiveLeafVoxels = this->activeLeafVoxelCount();
+        numActiveLeafVoxels = this->activeLeafVoxelCount(),
+        numActiveTiles = this->activeTileCount();
 
     os << "  Number of active voxels:       " << util::formattedInt(numActiveVoxels) << "\n";
+    os << "  Number of active tiles:        " << util::formattedInt(numActiveTiles) << "\n";
 
     Coord dim(0, 0, 0);
     uint64_t totalVoxels = 0;
@@ -2249,6 +2370,6 @@ Tree<RootNodeType>::print(std::ostream& os, int verboseLevel) const
 
 #endif // OPENVDB_TREE_TREE_HAS_BEEN_INCLUDED
 
-// Copyright (c) 2012-2014 DreamWorks Animation LLC
+// Copyright (c) 2012-2016 DreamWorks Animation LLC
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
